@@ -32,38 +32,42 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      
-      if (currentUser) {
-        // Fetch user role and data from Firestore
-        const userRef = doc(db, 'users', currentUser.uid);
-        const userSnap = await getDoc(userRef);
+      try {
+        setUser(currentUser);
         
-        if (userSnap.exists()) {
-          setUserData(userSnap.data() as UserData);
+        if (currentUser) {
+          // Fetch user role and data from Firestore
+          const userRef = doc(db, 'users', currentUser.uid);
+          const userSnap = await getDoc(userRef);
+          
+          if (userSnap.exists()) {
+            setUserData(userSnap.data() as UserData);
+          } else {
+            // Create new user document if it doesn't exist (default to 'user' role)
+            const newUserData: UserData = {
+              uid: currentUser.uid,
+              email: currentUser.email || '',
+              displayName: currentUser.displayName || 'User',
+              photoURL: currentUser.photoURL || '',
+              role: 'user', // Default role
+              status: 'active'
+            };
+            await setDoc(userRef, {
+              ...newUserData,
+              createdAt: serverTimestamp(),
+              lastSeen: serverTimestamp()
+            });
+            setUserData(newUserData);
+          }
         } else {
-          // Create new user document if it doesn't exist (default to 'user' role)
-          // For the first user, you might want to manually set role to 'admin' in Firestore Console
-          const newUserData: UserData = {
-            uid: currentUser.uid,
-            email: currentUser.email || '',
-            displayName: currentUser.displayName || 'User',
-            photoURL: currentUser.photoURL || '',
-            role: 'user', // Default role
-            status: 'active'
-          };
-          await setDoc(userRef, {
-            ...newUserData,
-            createdAt: serverTimestamp(),
-            lastSeen: serverTimestamp()
-          });
-          setUserData(newUserData);
+          setUserData(null);
         }
-      } else {
-        setUserData(null);
+      } catch (error) {
+        console.error("Error fetching user data:", error);
+        // Fallback: still set user data if possible, or just stop loading
+      } finally {
+        setLoading(false);
       }
-      
-      setLoading(false);
     });
 
     return () => unsubscribe();
@@ -76,7 +80,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const logout = () => signOut(auth);
 
-  const isAdmin = userData?.role === 'admin';
+  const isAdmin = user?.email?.toLowerCase() === "efadsunny00@gmail.com";
 
   return (
     <AuthContext.Provider value={{ user, userData, loading, isAdmin, signInWithGoogle, logout }}>

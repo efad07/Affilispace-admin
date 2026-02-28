@@ -8,7 +8,7 @@ import {
   Users, Activity, ShieldAlert, Ban, Server, Database, Zap, 
   Search, Bell, Settings, ChevronDown, Cpu, AlertTriangle, CheckCircle,
   TrendingUp, Globe, Lock, Eye, LogOut, UserCheck, UserX, Trash2,
-  Megaphone, Play, Pause, StopCircle, Check, X
+  Megaphone, Play, Pause, StopCircle, Check, X, Menu
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -142,11 +142,25 @@ export default function AdminDashboard() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [notification, setNotification] = useState<string | null>(null);
+
+  // Handle responsive sidebar
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth < 768) {
+        setIsSidebarOpen(false);
+      } else {
+        setIsSidebarOpen(true);
+      }
+    };
+    
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   
   // Real Data State
   const [users, setUsers] = useState<any[]>([]);
   const [reports, setReports] = useState<any[]>([]);
-  const [posts, setPosts] = useState<any[]>([]);
   const [ads, setAds] = useState<any[]>([]);
   const [activityData, setActivityData] = useState<any[]>([]);
   const [loadingData, setLoadingData] = useState(true);
@@ -160,37 +174,50 @@ export default function AdminDashboard() {
   const [blockedGrowth, setBlockedGrowth] = useState({ percent: 0, label: '0%' });
   const [moderationStats, setModerationStats] = useState<any[]>([]);
 
+  // Helper for safe date conversion
+  const safeDate = (timestamp: any): Date | null => {
+    if (!timestamp) return null;
+    if (timestamp.toDate && typeof timestamp.toDate === 'function') {
+      return timestamp.toDate();
+    }
+    const date = new Date(timestamp);
+    return isNaN(date.getTime()) ? null : date;
+  };
+
   // Helper for growth calculation
   const calculateMonthlyGrowth = (data: any[], dateField: string = 'createdAt') => {
-    const now = new Date();
-    const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    try {
+      const now = new Date();
+      const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
 
-    const currentMonthCount = data.filter((item: any) => {
-      if (!item[dateField]) return false;
-      const date = item[dateField]?.toDate ? item[dateField].toDate() : new Date(item[dateField]);
-      return date >= currentMonthStart;
-    }).length;
+      const currentMonthCount = data.filter((item: any) => {
+        const date = safeDate(item[dateField]);
+        return date && date >= currentMonthStart;
+      }).length;
 
-    const lastMonthCount = data.filter((item: any) => {
-      if (!item[dateField]) return false;
-      const date = item[dateField]?.toDate ? item[dateField].toDate() : new Date(item[dateField]);
-      return date >= lastMonthStart && date <= lastMonthEnd;
-    }).length;
+      const lastMonthCount = data.filter((item: any) => {
+        const date = safeDate(item[dateField]);
+        return date && date >= lastMonthStart && date <= lastMonthEnd;
+      }).length;
 
-    let growthPercent = 0;
-    if (lastMonthCount > 0) {
-      growthPercent = ((currentMonthCount - lastMonthCount) / lastMonthCount) * 100;
-    } else if (currentMonthCount > 0) {
-      growthPercent = 100;
+      let growthPercent = 0;
+      if (lastMonthCount > 0) {
+        growthPercent = ((currentMonthCount - lastMonthCount) / lastMonthCount) * 100;
+      } else if (currentMonthCount > 0) {
+        growthPercent = 100;
+      }
+      
+      const percent = parseFloat(growthPercent.toFixed(1));
+      return { 
+        percent,
+        label: percent > 0 ? `+${percent}%` : `${percent}%`
+      };
+    } catch (error) {
+      console.error("Error calculating growth:", error);
+      return { percent: 0, label: '0%' };
     }
-    
-    const percent = parseFloat(growthPercent.toFixed(1));
-    return { 
-      percent,
-      label: percent > 0 ? `+${percent}%` : `${percent}%`
-    };
   };
 
   // Listen to Firestore updates
@@ -198,86 +225,180 @@ export default function AdminDashboard() {
     if (!user) return;
 
     // 1. Users Listener
-    const unsubscribeUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
-      const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setUsers(usersList);
-      
-      // Active Users (5 mins)
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-      const active = usersList.filter((u: any) => u.lastSeen?.toDate() > fiveMinutesAgo).length;
-      setActiveUsersNow(active);
+    const unsubscribeUsers = onSnapshot(
+      collection(db, 'users'), 
+      (snapshot) => {
+        try {
+          const usersList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setUsers(usersList);
+          
+          // Active Users (5 mins)
+          const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+          const active = usersList.filter((u: any) => {
+            const lastSeen = safeDate(u.lastSeen);
+            return lastSeen && lastSeen > fiveMinutesAgo;
+          }).length;
+          setActiveUsersNow(active);
 
-      // Monthly Growth (Total Users)
-      setUserGrowth(calculateMonthlyGrowth(usersList, 'createdAt'));
-    });
+          // Monthly Growth (Total Users)
+          setUserGrowth(calculateMonthlyGrowth(usersList, 'createdAt'));
+
+          // Calculate Activity Data (Last 30 Days)
+          const activityMap = new Map();
+          const today = new Date();
+          for (let i = 29; i >= 0; i--) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            const dateStr = d.toISOString().split('T')[0];
+            const dayStr = String(d.getDate()).padStart(2, '0');
+            activityMap.set(dateStr, { name: dayStr, active: 0, new: 0 });
+          }
+
+          usersList.forEach((u: any) => {
+            // New Users
+            const createdDate = safeDate(u.createdAt);
+            if (createdDate) {
+              const dateStr = createdDate.toISOString().split('T')[0];
+              if (activityMap.has(dateStr)) {
+                activityMap.get(dateStr).new += 1;
+              }
+            }
+            // Active Users (based on lastSeen)
+            const lastSeenDate = safeDate(u.lastSeen);
+            if (lastSeenDate) {
+              const dateStr = lastSeenDate.toISOString().split('T')[0];
+              if (activityMap.has(dateStr)) {
+                activityMap.get(dateStr).active += 1;
+              }
+            }
+          });
+          
+          setActivityData(Array.from(activityMap.values()));
+        } catch (err) {
+          console.error("Error processing users data:", err);
+        }
+      },
+      (error) => console.error("Error fetching users:", error)
+    );
 
     // 2. Reports Listener
-    const unsubscribeReports = onSnapshot(query(collection(db, 'reports'), orderBy('createdAt', 'desc')), (snapshot) => {
-      const reportsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setReports(reportsList);
-      
-      // Calculate moderation stats
-      const resolved = reportsList.filter((r: any) => r.status === 'resolved').length;
-      const pending = reportsList.filter((r: any) => r.status === 'pending').length;
-      const dismissed = reportsList.filter((r: any) => r.status === 'dismissed').length;
-      
-      setModerationStats([
-        { name: 'Resolved', value: resolved, color: '#10B981' },
-        { name: 'Pending', value: pending, color: '#F59E0B' },
-        { name: 'Dismissed', value: dismissed, color: '#6B7280' },
-      ]);
+    const unsubscribeReports = onSnapshot(
+      query(collection(db, 'reports'), orderBy('createdAt', 'desc')), 
+      (snapshot) => {
+        try {
+          const reportsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setReports(reportsList);
+          
+          // Calculate moderation stats
+          const resolved = reportsList.filter((r: any) => r.status === 'resolved').length;
+          const pending = reportsList.filter((r: any) => r.status === 'pending').length;
+          const dismissed = reportsList.filter((r: any) => r.status === 'dismissed').length;
+          
+          setModerationStats([
+            { name: 'Resolved', value: resolved, color: '#10B981' },
+            { name: 'Pending', value: pending, color: '#F59E0B' },
+            { name: 'Dismissed', value: dismissed, color: '#6B7280' },
+          ]);
 
-      // Reports Growth
-      setReportsGrowth(calculateMonthlyGrowth(reportsList, 'createdAt'));
+          // Reports Growth
+          setReportsGrowth(calculateMonthlyGrowth(reportsList, 'createdAt'));
 
-      // Real-time Notification for new reports
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added" && !loadingData) {
-          const newReport = change.doc.data();
-          setNotification(`New Report: ${newReport.reason || 'Unknown Reason'}`);
-          setTimeout(() => setNotification(null), 5000);
+          // Real-time Notification for new reports
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "added" && !loadingData) {
+              const newReport = change.doc.data();
+              setNotification(`New Report: ${newReport.reason || 'Unknown Reason'}`);
+              setTimeout(() => setNotification(null), 5000);
+            }
+          });
+        } catch (err) {
+          console.error("Error processing reports data:", err);
         }
-      });
-    });
+      },
+      (error) => console.error("Error fetching reports:", error)
+    );
 
-    // 3. Posts Listener (Blocked Content)
-    const unsubscribePosts = onSnapshot(collection(db, 'posts'), (snapshot) => {
-      const postsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPosts(postsList);
-      
-      const blocked = postsList.filter((p: any) => p.status === 'blocked');
-      setBlockedContentCount(blocked.length);
-      
-      // Blocked Content Growth
-      setBlockedGrowth(calculateMonthlyGrowth(blocked, 'createdAt'));
-    });
+    // 3. Blocked Content Listener
+    const unsubscribeBlocked = onSnapshot(
+      collection(db, 'blocked'), 
+      (snapshot) => {
+        try {
+          const blockedList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setBlockedContentCount(blockedList.length);
+          
+          // Blocked Content Growth
+          setBlockedGrowth(calculateMonthlyGrowth(blockedList, 'createdAt'));
+        } catch (err) {
+          console.error("Error processing blocked content:", err);
+        }
+      },
+      (error) => console.error("Error fetching blocked content:", error)
+    );
 
-    // 4. Activity Listener (Chart)
-    const unsubscribeActivity = onSnapshot(query(collection(db, 'activity'), orderBy('date', 'asc'), limit(30)), (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        name: doc.data().date.split('-')[2], // Just the day
-        active: doc.data().activeUsers || 0,
-        new: doc.data().newUsers || 0
-      }));
-      setActivityData(data.length > 0 ? data : []); 
-    });
-
-    // 5. Ads Listener
-    const unsubscribeAds = onSnapshot(query(collection(db, 'ads'), orderBy('createdAt', 'desc')), (snapshot) => {
-      const adsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAds(adsList);
-    });
+    // 4. Ads Listener
+    const unsubscribeAds = onSnapshot(
+      query(collection(db, 'ads'), orderBy('createdAt', 'desc')), 
+      (snapshot) => {
+        try {
+          const adsList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setAds(adsList);
+        } catch (err) {
+          console.error("Error processing ads data:", err);
+        }
+      },
+      (error) => console.error("Error fetching ads:", error)
+    );
     
     setLoadingData(false);
 
     return () => {
       unsubscribeUsers();
       unsubscribeReports();
-      unsubscribePosts();
-      unsubscribeActivity();
+      unsubscribeBlocked();
       unsubscribeAds();
     };
   }, [user]);
+
+  // Not Authenticated - Show Login
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex flex-col items-center justify-center text-white p-4">
+        <div className="w-16 h-16 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/20 mb-6">
+          <Zap className="text-white w-8 h-8" />
+        </div>
+        <h1 className="text-3xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">Affilispace Admin</h1>
+        <p className="text-gray-400 mb-8">Sign in to access the control panel</p>
+        
+        <button 
+          onClick={signInWithGoogle}
+          className="px-8 py-3 bg-white text-black hover:bg-gray-200 rounded-xl font-bold transition-all transform hover:scale-105 flex items-center gap-3"
+        >
+          <Globe className="w-5 h-5" />
+          Sign in with Google
+        </button>
+      </div>
+    );
+  }
+
+  // Not Admin - Show Access Denied
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex flex-col items-center justify-center text-white p-4">
+        <ShieldAlert className="w-20 h-20 text-red-500 mb-6 animate-pulse" />
+        <h1 className="text-2xl font-bold mb-2">Access Denied</h1>
+        <p className="text-gray-400 mb-8 text-center max-w-md">
+          Your account <span className="text-white font-mono">{user.email}</span> is not authorized to access this dashboard.
+        </p>
+        <button 
+          onClick={logout}
+          className="px-6 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg text-sm transition-colors flex items-center gap-2"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
+      </div>
+    );
+  }
 
   // Admin Actions
   const handleBanUser = async (userId: string, currentStatus: string) => {
@@ -360,19 +481,26 @@ export default function AdminDashboard() {
           initial={{ x: -100, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           className={cn(
-            "hidden md:flex flex-col w-20 lg:w-64 border-r border-white/10 bg-black/40 backdrop-blur-xl transition-all duration-300",
-            !isSidebarOpen && "lg:w-20"
+            "fixed inset-y-0 left-0 z-50 flex flex-col h-full border-r border-white/10 bg-black/90 backdrop-blur-xl transition-all duration-300 md:relative md:bg-black/40",
+            isSidebarOpen ? "w-64 translate-x-0" : "-translate-x-full md:translate-x-0 md:w-20 lg:w-20"
           )}
         >
-          <div className="h-16 flex items-center justify-center border-b border-white/10">
+          <div className="h-16 flex items-center justify-center border-b border-white/10 relative">
             <div className="w-10 h-10 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/20">
               <Zap className="text-white w-6 h-6" />
             </div>
             {isSidebarOpen && (
-              <span className="ml-3 font-bold text-xl tracking-tight hidden lg:block bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+              <span className="ml-3 font-bold text-xl tracking-tight block md:hidden lg:block bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
                 Affilispace
               </span>
             )}
+            {/* Mobile Close Button */}
+            <button 
+              onClick={() => setIsSidebarOpen(false)}
+              className="absolute right-4 top-1/2 -translate-y-1/2 md:hidden text-gray-400 hover:text-white"
+            >
+              {isSidebarOpen && <X className="w-5 h-5" />}
+            </button>
           </div>
 
           <nav className="flex-1 py-6 space-y-2 px-3">
@@ -386,7 +514,10 @@ export default function AdminDashboard() {
             ].map((item) => (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => {
+                  setActiveTab(item.id);
+                  if (window.innerWidth < 768) setIsSidebarOpen(false);
+                }}
                 className={cn(
                   "w-full flex items-center p-3 rounded-xl transition-all duration-200 group",
                   activeTab === item.id 
@@ -395,7 +526,7 @@ export default function AdminDashboard() {
                 )}
               >
                 <item.icon className={cn("w-5 h-5", activeTab === item.id ? "text-cyan-400" : "group-hover:text-cyan-400")} />
-                {isSidebarOpen && <span className="ml-3 hidden lg:block font-medium">{item.label}</span>}
+                {isSidebarOpen && <span className="ml-3 block md:hidden lg:block font-medium">{item.label}</span>}
                 {activeTab === item.id && (
                   <motion.div layoutId="active-pill" className="absolute left-0 w-1 h-8 bg-cyan-400 rounded-r-full" />
                 )}
@@ -409,7 +540,7 @@ export default function AdminDashboard() {
               className="flex items-center justify-center w-full p-2 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-400 transition-colors"
             >
               <LogOut className="w-5 h-5" />
-              {isSidebarOpen && <span className="ml-3 hidden lg:block text-sm">Sign Out</span>}
+              {isSidebarOpen && <span className="ml-3 block md:hidden lg:block text-sm">Sign Out</span>}
             </button>
           </div>
         </motion.aside>
@@ -419,7 +550,13 @@ export default function AdminDashboard() {
           
           {/* Top Header */}
           <header className="h-16 border-b border-white/10 bg-black/20 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-20">
-            <div className="flex items-center">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                className="md:hidden p-2 text-gray-400 hover:text-white"
+              >
+                <Menu className="w-6 h-6" />
+              </button>
               <h1 className="text-lg font-semibold text-gray-200 tracking-wide">Global App Operational Dashboard</h1>
             </div>
 
@@ -544,7 +681,7 @@ export default function AdminDashboard() {
                                 )}>
                                   {report.reason}
                                 </span>
-                                <span className="text-xs text-gray-500">{report.createdAt?.toDate().toLocaleTimeString()}</span>
+                                <span className="text-xs text-gray-500">{safeDate(report.createdAt)?.toLocaleTimeString() || 'N/A'}</span>
                               </div>
                               <p className="text-sm text-gray-300 mb-3 line-clamp-2">{report.description}</p>
                               <div className="flex gap-2">
@@ -690,13 +827,13 @@ export default function AdminDashboard() {
                             <div key={ad.id} className="p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors">
                               <div className="flex justify-between items-start mb-2">
                                 <h4 className="font-bold text-white">{ad.title}</h4>
-                                <span className="text-xs text-gray-400">{ad.createdAt?.toDate().toLocaleDateString()}</span>
+                                <span className="text-xs text-gray-400">{safeDate(ad.createdAt)?.toLocaleDateString() || 'N/A'}</span>
                               </div>
                               <p className="text-sm text-gray-300 mb-2">{ad.content}</p>
                               <div className="flex items-center gap-2 text-xs text-gray-500 mb-3">
                                 <span>User: {ad.userId}</span>
                                 <span>•</span>
-                                <span>Duration: {ad.startDate?.toDate().toLocaleDateString()} - {ad.endDate?.toDate().toLocaleDateString()}</span>
+                                <span>Duration: {safeDate(ad.startDate)?.toLocaleDateString() || 'N/A'} - {safeDate(ad.endDate)?.toLocaleDateString() || 'N/A'}</span>
                               </div>
                               <div className="flex gap-2">
                                 <button 
@@ -737,7 +874,7 @@ export default function AdminDashboard() {
                                     {ad.status}
                                   </span>
                                 </div>
-                                <span className="text-xs text-gray-400">Ends: {ad.endDate?.toDate().toLocaleDateString()}</span>
+                                <span className="text-xs text-gray-400">Ends: {safeDate(ad.endDate)?.toLocaleDateString() || 'N/A'}</span>
                               </div>
                               <div className="flex items-center gap-2 text-xs text-gray-500 mb-3">
                                 <span>User: {ad.userId}</span>
@@ -814,7 +951,7 @@ export default function AdminDashboard() {
                                 {u.status}
                               </span>
                             </td>
-                            <td className="p-4 text-gray-500">{u.createdAt?.toDate().toLocaleDateString()}</td>
+                            <td className="p-4 text-gray-500">{safeDate(u.createdAt)?.toLocaleDateString() || 'N/A'}</td>
                             <td className="p-4 text-right">
                               <button 
                                 onClick={() => handleBanUser(u.id, u.status)}
